@@ -1,35 +1,41 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
-import './App.css'
+import { useEffect, useState } from "react";
 
-function App() {
-  const [count, setCount] = useState(0)
+type HealthResponse = { status: string };
+
+export default function App() {
+  const [status, setStatus] = useState<string>("loading...");
+  const [error, setError] = useState<string>("");
+
+  useEffect(() => {
+    async function run() {
+      try {
+        const res = await fetch("http://127.0.0.1:8000/health");
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`);
+        }
+        const data = (await res.json()) as HealthResponse;
+        setStatus(data.status);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        setError(msg);
+      }
+    }
+
+    run();
+  }, []);
 
   return (
-    <>
-      <div>
-        <a href="https://vite.dev" target="_blank">
-          <img src={viteLogo} className="logo" alt="Vite logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <h1>Vite + React</h1>
-      <div className="card">
-        <button onClick={() => setCount((count) => count + 1)}>
-          count is {count}
-        </button>
-        <p>
-          Edit <code>src/App.tsx</code> and save to test HMR
-        </p>
-      </div>
-      <p className="read-the-docs">
-        Click on the Vite and React logos to learn more
-      </p>
-    </>
-  )
-}
+    <div style={{ fontFamily: "system-ui", padding: 24 }}>
+      <h1>RAG Knowledge Assistant</h1>
 
-export default App
+      <p>
+        Backend health:{" "}
+        {error ? <span style={{ color: "crimson" }}>{error}</span> : <b>{status}</b>}
+      </p>
+
+      <p style={{ color: "#666" }}>
+        If you see <b>ok</b>, the frontend is successfully calling the backend.
+      </p>
+    </div>
+  );
+}
