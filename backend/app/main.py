@@ -1,3 +1,5 @@
+from app.db.init_db import init_db
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -15,3 +17,7 @@ app.add_middleware(
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+@app.on_event("startup")
+def on_startup() -> None:
+    init_db()
