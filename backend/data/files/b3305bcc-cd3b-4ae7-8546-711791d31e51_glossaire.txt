@@ -1,0 +1,15 @@
+Mini-glossaire (pour que tu te repères dès maintenant)
+
+Embeddings : transformer un texte en vecteur numérique pour mesurer la similarité.
+
+FAISS : librairie/index qui stocke ces vecteurs et permet de retrouver les plus proches rapidement.
+
+BM25 : recherche “lexicale” (mots exacts), utile pour acronymes, noms propres, chiffres.
+
+RAG : Retrieval Augmented Generation : on récupère des passages pertinents, puis on demande au LLM de répondre en s’appuyant dessus.
+
+Citations : on renvoie les sources (doc/page/extrait) pour prouver que la réponse est “grounded”.
+
+SSE/Streaming : renvoyer la réponse progressivement (effet ChatGPT) plutôt que d’attendre la fin.
+
+CI (GitHub Actions) : pipeline automatique qui vérifie tests/lint à chaque push/PR.
