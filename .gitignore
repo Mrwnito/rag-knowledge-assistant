@@ -12,3 +12,16 @@ dist/
 .DS_Store
 .vscode/
 .idea/
+
+# Python
+backend/.venv/
+**/__pycache__/
+.pytest_cache/
+
+# Local data (DO NOT COMMIT)
+backend/data/
+!backend/data/.gitkeep
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
