@@ -121,8 +121,34 @@ def index_document(doc_id: str, db: Session = Depends(get_db)) -> dict[str, int]
         select(Chunk).where(Chunk.document_id == doc_id).order_by(Chunk.chunk_index.asc())
     ).all()
 
+    doc = db.get(Document, doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
     if not chunks:
-        raise HTTPException(status_code=404, detail="No chunks found for document")
+        # Backfill chunks from stored file (TXT only for now)
+        p = Path(doc.storage_path)
+        if p.exists() and (doc.content_type.startswith("text/") or p.suffix.lower() == ".txt"):
+            text = extract_text_from_txt(p)
+            new_chunks = chunk_text(text)
+            for ch in new_chunks:
+                db.add(
+                    Chunk(
+                        document_id=doc.id,
+                        chunk_index=ch.index,
+                        text=ch.text,
+                        start_char=ch.start_char,
+                        end_char=ch.end_char,
+                    )
+                )
+            db.commit()
+
+            chunks = db.scalars(
+                select(Chunk).where(Chunk.document_id == doc_id).order_by(Chunk.chunk_index.asc())
+            ).all()
+
+        if not chunks:
+            raise HTTPException(status_code=404, detail="No chunks found for document")
 
     # Filter already indexed chunks
     existing = db.scalars(select(ChunkVector.chunk_id).where(ChunkVector.chunk_id.in_([c.id for c in chunks]))).all()
