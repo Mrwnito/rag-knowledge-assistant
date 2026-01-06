@@ -1,5 +1,7 @@
-﻿import { useEffect, useState } from "react";
+﻿import { useEffect, useRef, useState } from "react";
+
 import {
+  API_BASE_URL,
   listDocuments,
   uploadDocument,
   searchChunks,
@@ -95,21 +97,68 @@ export default function App() {
     }
   }
   async function onAsk() {
-    if (!chatQuestion.trim()) return;
+    const q = chatQuestion.trim();
+    if (!q) return;
+
+    // stop previous stream if any
+    if (esRef.current) {
+      esRef.current.close();
+      esRef.current = null;
+    }
+
     setChatBusy(true);
     setError("");
-    try {
-      const res = await chat(chatQuestion.trim(), 5);
-      setChatAnswer(res.answer);
-      setChatModel(`${res.provider} / ${res.model}`);
-      setChatLatency(res.latency_ms);
-      setChatCitations(res.citations);
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
+    setChatAnswer("");
+    setChatCitations([]);
+    setChatModel("");
+    setChatLatency(null);
+
+    const url =
+      `${API_BASE_URL}/v1/chat/stream?question=${encodeURIComponent(q)}&top_k=5`;
+
+    const es = new EventSource(url);
+    esRef.current = es;
+
+    es.addEventListener("token", (ev) => {
+      const data = JSON.parse((ev as MessageEvent).data) as { text: string };
+      setChatAnswer((prev) => prev + data.text);
+    });
+
+    es.addEventListener("meta", (ev) => {
+      const data = JSON.parse((ev as MessageEvent).data) as {
+        provider: string;
+        model: string;
+        latency_ms: number;
+        citations: Citation[];
+      };
+      setChatModel(`${data.provider} / ${data.model}`);
+      setChatLatency(data.latency_ms);
+      setChatCitations(data.citations);
+    });
+
+    es.addEventListener("done", () => {
+      es.close();
+      esRef.current = null;
       setChatBusy(false);
-    }
+    });
+
+    es.onerror = () => {
+      es.close();
+      esRef.current = null;
+      setChatBusy(false);
+      setError("Streaming failed (SSE). Check backend logs/CORS.");
+    };
   }
+
+
+  const esRef = useRef<EventSource | null>(null);
+
+  useEffect(() => {
+    return () => {
+      esRef.current?.close();
+      esRef.current = null;
+    };
+  }, []);
 
   return (
     <div style={{ fontFamily: "system-ui", padding: 24, maxWidth: 980, margin: "0 auto" }}>
