@@ -12,6 +12,8 @@ from app.services.llm import generate, get_provider
 import json
 from fastapi.responses import StreamingResponse
 from app.services.llm import generate_stream_ollama
+from app.services.llm import get_ollama_model
+
 
 router = APIRouter()
 
@@ -69,28 +71,59 @@ def build_prompt(question: str, retrieved: SearchResponse) -> str:
     context_blocks = []
     for i, h in enumerate(hits, start=1):
         context_blocks.append(
-            f"[{i}] Source: {h.filename} (doc_id={h.document_id}, chunk={h.chunk_index})\n"
+            f"[{i}] {h.filename} (doc_id={h.document_id}, chunk={h.chunk_index})\n"
             f"{h.text[:MAX_CHUNK_CHARS]}\n"
         )
 
     context = "\n".join(context_blocks)
+    n = len(hits)
+    allowed = ", ".join([f"[{i}]" for i in range(1, n + 1)])
 
     return (
-        "You are a RAG assistant. Answer the question using ONLY the context.\n"
-        "If the answer is not in the context, say you don't know based on the documents.\n"
-        "Cite sources by referencing [1], [2], ... in your answer.\n\n"
+        "You are a RAG assistant.\n"
+        f"You have EXACTLY {n} context blocks. Valid citations are ONLY: {allowed}.\n"
+        "Rules:\n"
+        "- Use ONLY the provided context.\n"
+        "- Do NOT add facts not explicitly present in the context.\n"
+        "- If insufficient, say you don't know based on the documents.\n"
+        f"- Cite sources ONLY using: {allowed}. Never output any other citation number.\n"
+        "- No bibliography, no extra references.\n"
+        "- Keep the answer short (max 3 sentences).\n\n"
         f"Question: {question}\n\n"
         f"Context:\n{context}\n"
         "Answer:\n"
     )
 
+import re
+
+def make_snippet(text: str, query: str, window: int = 240) -> str:
+    # cherche un mot significatif de la question (BM25, FAISS, etc.)
+    tokens = [t for t in re.findall(r"[A-Za-z0-9]+", query) if len(t) >= 3]
+    hay = text
+    lower = hay.lower()
+
+    for tok in tokens:
+        i = lower.find(tok.lower())
+        if i != -1:
+            start = max(0, i - window // 2)
+            end = min(len(hay), start + window)
+            snippet = hay[start:end]
+            if start > 0:
+                snippet = "…" + snippet
+            if end < len(hay):
+                snippet = snippet + "…"
+            return snippet
+
+    # fallback
+    return (text[:window] + "…") if len(text) > window else text
 
 
 @router.post("/chat", response_model=ChatResponse)
 async def chat(payload: ChatRequest, db: Session = Depends(get_db)) -> ChatResponse:
+    question = payload.question
     t0 = time.time()
 
-    retrieved = search_chunks(SearchRequest(query=payload.question, top_k=payload.top_k), db=db)
+    retrieved = search_chunks(SearchRequest(query=question, top_k=payload.top_k), db=db)
 
     hits = dedupe_hits(retrieved.hits)
     retrieved.hits = hits  # on réutilise la même liste partout (prompt + citations)
@@ -115,8 +148,10 @@ async def chat(payload: ChatRequest, db: Session = Depends(get_db)) -> ChatRespo
 
     # Build citations with short snippets (first 240 chars)
     citations: list[Citation] = []
+
     for h in retrieved.hits:
-        snippet = (h.text[:240] + "…") if len(h.text) > 240 else h.text
+        snippet = make_snippet(h.text, question, window=240)
+
         citations.append(
             Citation(
                 filename=h.filename,
@@ -142,6 +177,8 @@ async def chat_stream(question: str, top_k: int = 5, db: Session = Depends(get_d
     t0 = time.time()
 
     retrieved = search_chunks(SearchRequest(query=question, top_k=top_k), db=db)
+    hits = dedupe_hits(retrieved.hits)
+    retrieved.hits = hits
 
     # Guardrail
     if not retrieved.hits or retrieved.hits[0].score < 0.15:
@@ -155,7 +192,8 @@ async def chat_stream(question: str, top_k: int = 5, db: Session = Depends(get_d
     # Build citations (same logic as /chat)
     citations = []
     for h in retrieved.hits:
-        snippet = (h.text[:240] + "…") if len(h.text) > 240 else h.text
+        snippet = make_snippet(h.text, question, window=240)
+
         citations.append(
             {
                 "filename": h.filename,
@@ -177,11 +215,20 @@ async def chat_stream(question: str, top_k: int = 5, db: Session = Depends(get_d
         yield "event: meta\ndata: " + json.dumps(
             {
                 "provider": "ollama",
-                "model": "llama3.2:3b",
+                "model": get_ollama_model(),
                 "latency_ms": latency_ms,
                 "citations": citations,
             }
         ) + "\n\n"
         yield "event: done\ndata: {}\n\n"
 
-    return StreamingResponse(event_gen(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
