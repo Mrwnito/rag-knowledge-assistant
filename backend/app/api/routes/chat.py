@@ -9,6 +9,10 @@ from app.db.deps import get_db
 from app.api.routes.search import search_chunks, SearchRequest, SearchResponse
 from app.services.llm import generate, get_provider
 
+import json
+from fastapi.responses import StreamingResponse
+from app.services.llm import generate_stream_ollama
+
 router = APIRouter()
 
 class ChatRequest(BaseModel):
@@ -133,3 +137,51 @@ async def chat(payload: ChatRequest, db: Session = Depends(get_db)) -> ChatRespo
         citations=citations,
     )
 
+@router.get("/chat/stream")
+async def chat_stream(question: str, top_k: int = 5, db: Session = Depends(get_db)):
+    t0 = time.time()
+
+    retrieved = search_chunks(SearchRequest(query=question, top_k=top_k), db=db)
+
+    # Guardrail
+    if not retrieved.hits or retrieved.hits[0].score < 0.15:
+        async def gen():
+            yield "event: token\ndata: " + json.dumps({"text": "Je n'ai pas assez d'information dans les documents fournis pour répondre."}) + "\n\n"
+            yield "event: done\ndata: {}\n\n"
+        return StreamingResponse(gen(), media_type="text/event-stream")
+
+    prompt = build_prompt(question, retrieved)
+
+    # Build citations (same logic as /chat)
+    citations = []
+    for h in retrieved.hits:
+        snippet = (h.text[:240] + "…") if len(h.text) > 240 else h.text
+        citations.append(
+            {
+                "filename": h.filename,
+                "document_id": h.document_id,
+                "chunk_id": h.chunk_id,
+                "chunk_index": h.chunk_index,
+                "start_char": h.start_char,
+                "end_char": h.end_char,
+                "snippet": snippet,
+            }
+        )
+
+    async def event_gen():
+        # stream tokens
+        async for tok in generate_stream_ollama(prompt):
+            yield "event: token\ndata: " + json.dumps({"text": tok}) + "\n\n"
+
+        latency_ms = int((time.time() - t0) * 1000)
+        yield "event: meta\ndata: " + json.dumps(
+            {
+                "provider": "ollama",
+                "model": "llama3.2:3b",
+                "latency_ms": latency_ms,
+                "citations": citations,
+            }
+        ) + "\n\n"
+        yield "event: done\ndata: {}\n\n"
+
+    return StreamingResponse(event_gen(), media_type="text/event-stream")

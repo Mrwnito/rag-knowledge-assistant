@@ -3,6 +3,8 @@
 import os
 from typing import Literal
 import httpx
+import json
+from typing import AsyncIterator
 
 Provider = Literal["ollama", "openai"]
 
@@ -68,3 +70,27 @@ async def generate(provider: Provider, prompt: str) -> tuple[str, str]:
             return answer, model
 
     raise RuntimeError(f"Unknown provider: {provider}")
+
+async def generate_stream_ollama(prompt: str) -> AsyncIterator[str]:
+    model = get_ollama_model()
+    async with httpx.AsyncClient(timeout=None) as client:
+        async with client.stream(
+            "POST",
+            "http://127.0.0.1:11434/api/generate",
+            json={
+                "model": model,
+                "prompt": prompt,
+                "stream": True,
+                "options": {"temperature": 0.2, "num_predict": 260},
+            },
+        ) as r:
+            r.raise_for_status()
+            async for line in r.aiter_lines():
+                if not line:
+                    continue
+                data = json.loads(line)
+                chunk = data.get("response", "")
+                if chunk:
+                    yield chunk
+                if data.get("done"):
+                    break
