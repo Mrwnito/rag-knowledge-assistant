@@ -80,42 +80,68 @@ def build_prompt(question: str, retrieved: SearchResponse) -> str:
     allowed = ", ".join([f"[{i}]" for i in range(1, n + 1)])
 
     return (
-        "You are a RAG assistant.\n"
+        "You are a strict RAG assistant.\n"
         f"You have EXACTLY {n} context blocks. Valid citations are ONLY: {allowed}.\n"
         "Rules:\n"
-        "- Use ONLY the provided context.\n"
-        "- Do NOT add facts not explicitly present in the context.\n"
-        "- If insufficient, say you don't know based on the documents.\n"
-        f"- Cite sources ONLY using: {allowed}. Never output any other citation number.\n"
-        "- No bibliography, no extra references.\n"
-        "- Keep the answer short (max 3 sentences).\n\n"
+        "- Answer using ONLY information explicitly stated in the context.\n"
+        "- Do NOT add explanations, typical uses, or background knowledge.\n"
+        "- If the context does not contain the answer, reply exactly: \"Je ne sais pas d’après les documents fournis.\" (no citations)\n"
+        f"- If you answer, you MUST include at least one citation from {allowed}.\n"
+        f"- Do NOT output any citation outside {allowed}.\n"
+        "- Keep the answer to 1-2 sentences.\n\n"
         f"Question: {question}\n\n"
         f"Context:\n{context}\n"
         "Answer:\n"
     )
 
+
 import re
 
-def make_snippet(text: str, query: str, window: int = 240) -> str:
-    # cherche un mot significatif de la question (BM25, FAISS, etc.)
-    tokens = [t for t in re.findall(r"[A-Za-z0-9]+", query) if len(t) >= 3]
-    hay = text
-    lower = hay.lower()
+STOPWORDS = {
+    "c", "ce", "cet", "cette", "ces",
+    "est", "quoi", "que", "qui", "comment", "pourquoi",
+    "un", "une", "des", "le", "la", "les",
+    "de", "du", "d", "a", "au", "aux", "en", "pour", "sur",
+}
 
-    for tok in tokens:
+def make_snippet(text: str, query: str, window: int = 240) -> str:
+    raw = re.findall(r"[A-Za-z0-9]+", query)
+    tokens = []
+    for t in raw:
+        tl = t.lower()
+        if len(t) < 3:
+            continue
+        if tl in STOPWORDS:
+            continue
+        tokens.append(t)
+
+    # dédoublonnage + priorisation:
+    # 1) tokens avec chiffres ou acronyme (BM25, RAG, FAISS)
+    # 2) tokens longs
+    uniq = list(dict.fromkeys(tokens))  # garde l'ordre
+    def score(t: str) -> tuple[int, int]:
+        has_digit = any(ch.isdigit() for ch in t)
+        is_acronym = t.isupper()
+        return (1 if (has_digit or is_acronym) else 0, len(t))
+
+    uniq.sort(key=lambda t: score(t), reverse=True)
+
+    lower = text.lower()
+    for tok in uniq:
         i = lower.find(tok.lower())
         if i != -1:
             start = max(0, i - window // 2)
-            end = min(len(hay), start + window)
-            snippet = hay[start:end]
+            end = min(len(text), start + window)
+            snippet = text[start:end]
             if start > 0:
                 snippet = "…" + snippet
-            if end < len(hay):
+            if end < len(text):
                 snippet = snippet + "…"
             return snippet
 
     # fallback
     return (text[:window] + "…") if len(text) > window else text
+
 
 
 @router.post("/chat", response_model=ChatResponse)
