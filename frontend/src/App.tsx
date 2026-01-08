@@ -4,6 +4,7 @@ import {
   API_BASE_URL,
   listDocuments,
   uploadDocument,
+  indexDocument,
   searchChunks,
   chat,
   type DocumentItem,
@@ -40,6 +41,9 @@ export default function App() {
   const [docs, setDocs] = useState<DocumentItem[]>([]);
   const [selected, setSelected] = useState<File | null>(null);
   const [busyUpload, setBusyUpload] = useState(false);
+  const [autoIndex, setAutoIndex] = useState(true); 
+  
+
 
   // Search
   const [query, setQuery] = useState("C'est quoi FAISS ?");
@@ -72,15 +76,24 @@ export default function App() {
     setBusyUpload(true);
     setError("");
     try {
-      await uploadDocument(selected);
+      const doc = await uploadDocument(selected); // récupère id
       setSelected(null);
       await refreshDocs();
+
+      if (autoIndex) {
+        // on lance sans bloquer l'UI
+        indexDocument(doc.id)
+          .then(() => refreshDocs())
+          .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+      }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusyUpload(false);
     }
   }
+
+
 
   async function onSearch() {
     if (!query.trim()) return;
@@ -184,7 +197,7 @@ export default function App() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Ask a question..."
-            style={{ flex: 1, padding: 10, borderRadius: 8, border: "1px solid #ddd" }}
+            style={{ flex: 1, ...ui.input }}
             disabled={busySearch}
           />
           <button onClick={onSearch} disabled={busySearch || !query.trim()}>
@@ -202,7 +215,7 @@ export default function App() {
           ) : (
             <div style={{ display: "grid", gap: 12 }}>
               {hits.map((h) => (
-                <div key={`${h.document_id}:${h.chunk_id}`} style={{ padding: 12, border: "1px solid #eee", borderRadius: 12 }}>
+                <div key={`${h.document_id}:${h.chunk_id}`} style={ui.card}>
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
                     <div>
                       <div style={{ fontWeight: 600 }}>{h.filename}</div>
@@ -215,20 +228,8 @@ export default function App() {
                     </div>
                   </div>
 
-                  <pre
-                    style={{
-                      marginTop: 10,
-                      whiteSpace: "pre-wrap",
-                      background: "#fafafa",
-                      padding: 10,
-                      borderRadius: 8,
-                      border: "1px solid #f0f0f0",
-                      maxHeight: 220,
-                      overflow: "auto",
-                    }}
-                  >
-                    {h.text}
-                  </pre>
+                  <pre style={ui.pre}>{h.text}</pre>
+
                 </div>
               ))}
             </div>
@@ -295,6 +296,17 @@ export default function App() {
 
         <div style={{ marginTop: 10, display: "flex", gap: 12, alignItems: "center" }}>
           <input type="file" onChange={(e) => setSelected(e.target.files?.[0] ?? null)} disabled={busyUpload} />
+
+          <label style={{ display: "flex", gap: 8, alignItems: "center", color: "#b5b5b5", fontSize: 14 }}>
+            <input
+              type="checkbox"
+              checked={autoIndex}
+              onChange={(e) => setAutoIndex(e.target.checked)}
+              disabled={busyUpload}
+            />
+            Auto-index after upload
+          </label>
+
           <button onClick={onUpload} disabled={!selected || busyUpload}>
             {busyUpload ? "Uploading..." : "Upload"}
           </button>
@@ -302,6 +314,7 @@ export default function App() {
             Refresh
           </button>
         </div>
+
 
         {docs.length === 0 ? (
           <p style={{ color: "#666", marginTop: 12 }}>No documents yet.</p>
